@@ -21,7 +21,8 @@ PLOT: matplotlib.pyplot = plt
 
 def main():
     """Program entry point"""
-    heatdata, _, _ = solve()
+    # It's recommended to not enable exhaustive search until mid to late game.
+    heatdata, _, _ = solve(exhaustive=True)
     init_plot(heatdata)
 
 
@@ -108,11 +109,104 @@ def count_occurances(grid: np.array, ships: Dict[int, int]) -> List[List[int]]:
     return res
 
 
-def solve() -> Tuple[np.array, np.array, np.array]:
-    """Generate the heatmap data using the methods described in the blogpost"""
-    res = count_occurances(GRID, SHIPS)
+def place_ship(i: int, j: int, ship: int, grid: np.array, vert: bool) -> np.array:
+    """Increment the cells that could not contain another ship if the ship occupied the given coords."""
+    # Effective values
+    e_i = i - 1
+    e_j = j - 1
+    if vert:
+        e_i_delta = ship + 2
+        e_j_delta = 3
+    else:
+        e_i_delta = 3
+        e_j_delta = ship + 2
 
-    matrix = np.array(res)
+    if e_i < 0:
+        e_i_delta -= 1
+        e_i += 1
+    if e_i + e_i_delta > len(grid):
+        e_i_delta -= 1
+
+    if e_j < 0:
+        e_j += 1
+        e_j_delta -= 1
+    if e_j + e_j_delta > len(grid[i]):
+        e_j_delta -= 1
+
+    add_grid = np.ones((e_i_delta, e_j_delta))
+
+    add_grid = np.pad(add_grid, ((e_i, len(grid)-e_i_delta-e_i), (e_j, len(grid[i])-e_j_delta-e_j)), 'constant')
+
+    return np.add(grid, add_grid)
+
+
+def permutate_board(GRID: np.array, SHIPS: dict):
+    """Exhaustively count valid board configurations - See github issue #1"""
+    all_prob = np.zeros_like(GRID)
+
+    # Base case
+    if len(SHIPS.keys()) == 0:
+        return all_prob
+
+    # Place largest ship
+    ship = max(SHIPS.keys())
+    ships = SHIPS.copy()
+    if ships[ship] == 1:
+        ships.pop(ship)
+    else:
+        ships[ship] -= 1
+
+    for i in range(len(GRID)):
+        for j in range(len(GRID[i])):
+            # Place ship
+            vert, hor = ship_fits(i, j, ship, GRID)
+
+            vert_prob = None
+            if vert:
+                grid = GRID.copy()
+                grid = place_ship(i, j, ship, grid, vert=True)
+
+                # Recursively call self
+                vert_prob = permutate_board(grid, ships)
+                if vert_prob is not None:
+                    for k in range(i, i + ship):
+                        vert_prob[k][j] += 1
+
+            hor_prob = None
+            if hor:
+                grid = GRID.copy()
+
+                grid = place_ship(i, j, ship, grid, vert=False)
+                # Recursively call self
+                hor_prob = permutate_board(grid, ships)
+                if hor_prob is not None:
+                    for k in range(j, j + ship):
+                        hor_prob[i][k] += 1
+
+            # Sum up probability counts
+            if vert_prob is not None and hor_prob is not None:
+                res = np.add(vert_prob, hor_prob)
+                all_prob = np.add(all_prob, res)
+            elif vert_prob is not None:
+                all_prob = np.add(all_prob, vert_prob)
+            elif hor_prob is not None:
+                all_prob = np.add(all_prob, hor_prob)
+
+    # If there weren't any valid placements, return None
+    if all_prob.sum() == 0:
+        return None
+
+    return all_prob
+
+
+def solve(exhaustive=False) -> Tuple[np.array, np.array, np.array]:
+    """Generate the heatmap data using the methods described in the blogpost"""
+    if exhaustive:
+        prob = permutate_board(GRID, SHIPS)
+    else:
+        prob = count_occurances(GRID, SHIPS)
+
+    matrix = np.array(prob)
 
     size = 3
 
@@ -158,6 +252,12 @@ def solve() -> Tuple[np.array, np.array, np.array]:
                     wsum = info_sum(ship, i, j, singles, vert, vert=True)
                     for k in range(j, j + ship):
                         weighted_info[i][k] += wsum * count
+
+    # If we used the exhaustive search, we know for a fact that the zeros cannot contain a ship.
+    if exhaustive:
+        weighted_info = np.where(matrix != 0, weighted_info, 0)
+        vert = np.where(matrix != 0, vert, 0)
+        hor = np.where(matrix != 0, hor, 0)
 
     return weighted_info, vert, hor
 
